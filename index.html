@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Wedding Gift Ledger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script>
+tailwind.config = { theme: { extend: {
+  colors: { ink:'#1d2540', paper:'#f6f4fa', marigold:'#e59a0e', rose:'#b3365a', leaf:'#2b7a58', mist:'#e6e2f0' },
+  fontFamily: { display:['"Bricolage Grotesque"','Georgia','serif'], body:['Figtree','system-ui','sans-serif'] }
+}}};
+</script>
+<style>
+  body { font-family: Figtree, system-ui, sans-serif; background:#f6f4fa; color:#1d2540; }
+  h1,h2,h3,.font-display { font-family: "Bricolage Grotesque", Georgia, serif; }
+  :focus-visible { outline:3px solid #e59a0e; outline-offset:2px; }
+  .card-thanked { border-left-color:#2b7a58; } .card-pending { border-left-color:#e59a0e; } .card-review { border-left-color:#b3365a; }
+  @media (prefers-reduced-motion: reduce){ *{transition:none!important} }
+</style>
+</head>
+<body class="min-h-screen">
+<div class="max-w-6xl mx-auto px-4 py-6 sm:py-10">
+
+  <header class="flex flex-wrap items-end justify-between gap-4 mb-6">
+    <div>
+      <h1 class="text-3xl sm:text-4xl font-bold leading-tight">The Wedding Gift Ledger</h1>
+      <p class="text-ink/70 mt-1">Turn the cousin’s scribbled notes into thank-you messages, and keep track of who has been thanked.</p>
+    </div>
+    <div class="bg-white border border-mist rounded-lg px-4 py-3 text-sm w-full sm:w-auto">
+      <label class="flex items-center gap-3 cursor-pointer font-medium">
+        <input id="mockToggle" type="checkbox" class="h-4 w-4 accent-marigold" checked>
+        Demo mode (no backend needed)
+      </label>
+      <div id="apiRow" class="hidden mt-2 flex items-center gap-2">
+        <label for="apiBase" class="text-ink/70">API address</label>
+        <input id="apiBase" value="http://localhost:8000" class="border border-mist rounded px-2 py-1 w-52">
+      </div>
+    </div>
+  </header>
+
+  <!-- Raw notes -->
+  <section class="bg-white border border-mist rounded-lg p-4 sm:p-5 mb-6" aria-labelledby="notesH">
+    <h2 id="notesH" class="text-xl font-semibold mb-1">Paste the raw notes</h2>
+    <p class="text-sm text-ink/70 mb-3">One gift per line is fine. Messy is fine too.</p>
+    <textarea id="notes" rows="6" class="w-full border border-mist rounded-md p-3 font-mono text-sm bg-paper"
+      placeholder="Rahman uncle - dinner set&#10;Shilpi khala + family, envelope&#10;the people from Chittagong - 2 sarees, didnt catch name&#10;big box, no card???"></textarea>
+    <div class="flex flex-wrap items-center gap-3 mt-3">
+      <button id="processBtn" class="bg-ink text-white font-semibold rounded-md px-5 py-2.5 hover:bg-ink/90 disabled:opacity-50">Process Notes</button>
+      <button id="sampleBtn" class="text-sm underline text-ink/70 hover:text-ink">Fill with sample notes</button>
+      <span id="status" class="text-sm text-ink/70" role="status" aria-live="polite"></span>
+    </div>
+  </section>
+
+  <!-- Tabs -->
+  <div role="tablist" class="flex gap-1 border-b border-mist mb-5">
+    <button role="tab" id="tab-thanks" data-tab="thanks" class="tab px-4 py-2.5 font-semibold">Thank-You Messages</button>
+    <button role="tab" id="tab-ledger" data-tab="ledger" class="tab px-4 py-2.5 font-semibold">Mother’s Ledger</button>
+  </div>
+
+  <section id="panel-thanks">
+    <div id="filters" class="flex flex-wrap gap-2 mb-4"></div>
+    <div id="cards" class="grid gap-4 md:grid-cols-2"></div>
+  </section>
+
+  <section id="panel-ledger" class="hidden">
+    <div id="stats" class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5"></div>
+    <div class="bg-white border border-mist rounded-lg overflow-x-auto">
+      <table class="w-full text-left min-w-[720px]">
+        <thead class="bg-ink text-white text-sm">
+          <tr>
+            <th class="px-4 py-3 font-semibold w-16">ID</th>
+            <th class="px-4 py-3 font-semibold">Guest name</th>
+            <th class="px-4 py-3 font-semibold">Gift</th>
+            <th class="px-4 py-3 font-semibold">Estimated value (৳)</th>
+            <th class="px-4 py-3 font-semibold">Thanked</th>
+            <th class="px-4 py-3"><span class="sr-only">Save</span></th>
+          </tr>
+        </thead>
+        <tbody id="rows" class="divide-y divide-mist"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<div id="toast" class="fixed bottom-4 left-1/2 -translate-x-1/2 bg-ink text-white text-sm px-4 py-2 rounded-md shadow-lg hidden" role="status" aria-live="polite"></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const taka = (n) => '৳' + Number(n || 0).toLocaleString('en-US');
+
+  const state = { mock: true, items: [], filter: 'all', tab: 'thanks', nextId: 1 };
+
+  /* ---------- Mock backend ---------- */
+  function mockMessage(name, family, gift) {
+    const who = name || 'dear guest';
+    const together = family ? ` and your family` : '';
+    const what = gift === 'Gift Envelope'
+      ? 'your generous gift'
+      : `the lovely ${gift.toLowerCase()}`;
+    return `Dear ${who}${together}, thank you so much for celebrating with us and for ${what}. Your presence made Farhana’s wedding day even more special. With love and gratitude, Farhana’s family.`;
+  }
+  function parseLine(line) {
+    const unclear = /no card|didn'?t catch|did not catch|\?\?\?|unknown|no name/i.test(line);
+    const family = /\bfamily\b/i.test(line);
+    let [left, ...rest] = line.split(/\s+-\s+|,\s+/);
+    let right = rest.join(', ');
+    if (/envelope/i.test(left) && !right) { right = left; left = ''; }
+    let name = left.replace(/\+?\s*family/ig, '').replace(/\s+/g, ' ').trim();
+    let gift = right.replace(/,?\s*(didn'?t catch name|no card\?*|\?\?\?)/ig, '').replace(/\s*family\s*/ig, '').trim();
+    if (/envelope/i.test(line)) gift = 'Gift Envelope';
+    if (!gift) gift = 'Unidentified gift';
+    const needsReview = unclear || !name || /^(the people|big box|someone|a guest)/i.test(name);
+    if (!name || /^big box/i.test(name)) name = 'Unknown guest';
+    return { guest_name: name, is_family: family, gift_item: gift, needs_review: needsReview };
+  }
+  const mockApi = {
+    process(text) {
+      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+      const created = lines.map(l => {
+        const p = parseLine(l);
+        return { id: state.nextId++, ...p, thank_you_message: mockMessage(p.needs_review && p.guest_name === 'Unknown guest' ? '' : p.guest_name, p.is_family, p.gift_item),
+                 thanked: false, estimated_value: 0 };
+      });
+      return created;
+    }
+  };
+
+  /* ---------- API layer (real or mock) ---------- */
+  const base = () => $('apiBase').value.replace(/\/$/, '');
+  async function call(method, path, body) {
+    const res = await fetch(base() + path, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    if (!res.ok) throw new Error(`Server replied ${res.status}`);
+    return res.status === 204 ? null : res.json();
+  }
+  const normalize = (r) => ({
+    id: r.id, guest_name: r.guest_name ?? r.name ?? 'Unknown guest',
+    is_family: !!(r.is_family ?? r.family), gift_item: r.gift_item ?? r.gift ?? 'Gift Envelope',
+    thank_you_message: r.thank_you_message ?? r.message ?? '',
+    needs_review: !!r.needs_review, thanked: !!(r.thanked ?? r.is_thanked),
+    estimated_value: Number(r.estimated_value ?? r.value ?? 0)
+  });
+
+  async function processNotes(text) {
+    if (state.mock) { state.items.push(...mockApi.process(text)); return; }
+    const data = await call('POST', '/api/notes/process', { notes: text });
+    const list = Array.isArray(data) ? data : (data.entries || data.ledger || data.items || null);
+    if (list) { state.items = list.map(normalize); return; }
+    const all = await call('GET', '/api/ledger');   // fall back to reloading the ledger
+    state.items = (Array.isArray(all) ? all : all.items || []).map(normalize);
+  }
+  async function markThanked(item) {
+    if (!state.mock) {
+      const r = await call('PATCH', `/api/ledger/${item.id}/thank`);
+      if (r && typeof r === 'object' && 'thanked' in normalize(r) && r.id !== undefined) Object.assign(item, normalize(r));
+    }
+    item.thanked = true;
+  }
+  async function saveValue(item, value) {
+    if (!state.mock) await call('PATCH', `/api/ledger/${item.id}/value`, { estimated_value: value });
+    item.estimated_value = value;
+  }
+
+  /* ---------- UI helpers ---------- */
+  let toastTimer;
+  function toast(msg) {
+    const t = $('toast'); t.textContent = msg; t.classList.remove('hidden');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), 2600);
+  }
+  const setStatus = (m) => { $('status').textContent = m; };
+
+  /* ---------- Rendering ---------- */
+  function renderFilters() {
+    const count = { all: state.items.length, pending: state.items.filter(i => !i.thanked).length, thanked: state.items.filter(i => i.thanked).length };
+    const defs = [['all', 'All'], ['pending', 'Pending Thank-You'], ['thanked', 'Thanked']];
+    $('filters').innerHTML = defs.map(([k, label]) => {
+      const on = state.filter === k;
+      return `<button data-filter="${k}" aria-pressed="${on}" class="px-4 py-2 rounded-full text-sm font-semibold border ${on ? 'bg-ink text-white border-ink' : 'bg-white text-ink border-mist hover:border-ink'}">${label} <span class="${on ? 'text-white/70' : 'text-ink/50'}">${count[k]}</span></button>`;
+    }).join('');
+  }
+  function renderCards() {
+    const list = state.items.filter(i => state.filter === 'all' || (state.filter === 'thanked' ? i.thanked : !i.thanked));
+    if (!state.items.length) {
+      $('cards').innerHTML = `<p class="md:col-span-2 bg-white border border-dashed border-mist rounded-lg p-8 text-center text-ink/70">No gifts yet. Paste your notes above and select <strong>Process Notes</strong>.</p>`;
+      return;
+    }
+    if (!list.length) {
+      $('cards').innerHTML = `<p class="md:col-span-2 bg-white border border-dashed border-mist rounded-lg p-8 text-center text-ink/70">Nothing in this view.</p>`;
+      return;
+    }
+    $('cards').innerHTML = list.map(i => `
+      <article class="bg-white border border-mist border-l-4 ${i.needs_review ? 'card-review' : i.thanked ? 'card-thanked' : 'card-pending'} rounded-lg p-4 flex flex-col gap-3">
+        <div class="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <h3 class="text-lg font-bold leading-snug">${esc(i.guest_name)}
+              ${i.is_family ? '<span class="ml-1 align-middle text-xs font-semibold bg-mist text-ink rounded px-2 py-0.5">Family</span>' : ''}</h3>
+            <p class="text-sm text-ink/70">${esc(i.gift_item)}</p>
+          </div>
+          <div class="flex flex-wrap gap-1.5">
+            ${i.needs_review ? '<span class="text-xs font-semibold bg-rose/10 text-rose rounded px-2 py-1">⚠ Needs review</span>' : ''}
+            ${i.thanked ? '<span class="text-xs font-semibold bg-leaf/10 text-leaf rounded px-2 py-1">Thanked</span>' : '<span class="text-xs font-semibold bg-marigold/15 text-[#8a5a00] rounded px-2 py-1">Pending</span>'}
+          </div>
+        </div>
+        <p class="text-sm leading-relaxed bg-paper rounded-md p-3 max-w-prose">${esc(i.thank_you_message)}</p>
+        ${i.needs_review ? '<p class="text-xs text-rose">The name or gift wasn’t clear in the notes. Check it before sending.</p>' : ''}
+        <div class="flex gap-2 mt-auto">
+          <button data-copy="${i.id}" class="border border-ink text-ink font-semibold rounded-md px-3 py-1.5 text-sm hover:bg-ink hover:text-white">Copy Message</button>
+          <button data-thank="${i.id}" ${i.thanked ? 'disabled' : ''} class="bg-leaf text-white font-semibold rounded-md px-3 py-1.5 text-sm hover:bg-leaf/90 disabled:opacity-40 disabled:cursor-not-allowed">${i.thanked ? 'Thanked' : 'Mark as Thanked'}</button>
+        </div>
+      </article>`).join('');
+  }
+  function renderLedger() {
+    const total = state.items.length, thanked = state.items.filter(i => i.thanked).length;
+    const sum = state.items.reduce((s, i) => s + (Number(i.estimated_value) || 0), 0);
+    const stat = (label, val, tone) => `<div class="bg-white border border-mist rounded-lg p-4"><div class="text-sm text-ink/70">${label}</div><div class="font-display text-3xl font-bold ${tone}">${val}</div></div>`;
+    $('stats').innerHTML = stat('Total Gifts', total, '') + stat('Total Thanked', thanked, 'text-leaf') + stat('Total Pending', total - thanked, 'text-[#8a5a00]') + stat('Total Estimated Reciprocal Value', taka(sum), '');
+    $('rows').innerHTML = state.items.length ? state.items.map(i => `
+      <tr>
+        <td class="px-4 py-3 text-ink/70 tabular-nums">#${i.id}</td>
+        <td class="px-4 py-3 font-semibold">${esc(i.guest_name)}${i.is_family ? ' <span class="text-xs bg-mist rounded px-1.5 py-0.5 font-medium">Family</span>' : ''}${i.needs_review ? ' <span class="text-rose" title="Needs review">⚠</span>' : ''}</td>
+        <td class="px-4 py-3 text-sm">${esc(i.gift_item)}</td>
+        <td class="px-4 py-3"><input type="number" min="0" step="100" inputmode="numeric" data-val="${i.id}" value="${i.estimated_value || ''}" placeholder="0" aria-label="Estimated value for ${esc(i.guest_name)}" class="w-32 border border-mist rounded px-2 py-1.5 tabular-nums"></td>
+        <td class="px-4 py-3">${i.thanked ? '<span class="text-xs font-semibold bg-leaf/10 text-leaf rounded px-2 py-1">Thanked</span>' : '<span class="text-xs font-semibold bg-marigold/15 text-[#8a5a00] rounded px-2 py-1">Pending</span>'}</td>
+        <td class="px-4 py-3 text-right"><button data-save="${i.id}" class="bg-ink text-white font-semibold rounded-md px-3 py-1.5 text-sm hover:bg-ink/90">Save Value</button></td>
+      </tr>`).join('') : `<tr><td colspan="6" class="px-4 py-8 text-center text-ink/70">The ledger is empty. Process some notes first.</td></tr>`;
+  }
+  function renderTabs() {
+    document.querySelectorAll('.tab').forEach(b => {
+      const on = b.dataset.tab === state.tab;
+      b.setAttribute('aria-selected', on);
+      b.className = `tab px-4 py-2.5 font-semibold -mb-px border-b-2 ${on ? 'border-marigold text-ink' : 'border-transparent text-ink/60 hover:text-ink'}`;
+    });
+    $('panel-thanks').classList.toggle('hidden', state.tab !== 'thanks');
+    $('panel-ledger').classList.toggle('hidden', state.tab !== 'ledger');
+  }
+  const render = () => { renderTabs(); renderFilters(); renderCards(); renderLedger(); };
+
+  /* ---------- Events ---------- */
+  $('mockToggle').addEventListener('change', async (e) => {
+    state.mock = e.target.checked;
+    $('apiRow').classList.toggle('hidden', state.mock);
+    state.items = []; state.nextId = 1;
+    if (state.mock) seed(); else {
+      try { const all = await call('GET', '/api/ledger'); state.items = (Array.isArray(all) ? all : all.items || []).map(normalize); setStatus('Connected to the backend.'); }
+      catch { setStatus('Can’t reach the backend yet. Start it on the API address, or switch back to demo mode.'); }
+    }
+    render();
+  });
+  $('sampleBtn').addEventListener('click', () => {
+    $('notes').value = "Rahman uncle - dinner set\nShilpi khala + family, envelope\nthe people from Chittagong - 2 sarees, didnt catch name\nbig box, no card???";
+  });
+  $('processBtn').addEventListener('click', async () => {
+    const text = $('notes').value.trim();
+    if (!text) { setStatus('Paste some notes first.'); return; }
+    const btn = $('processBtn'); btn.disabled = true; btn.textContent = 'Processing…'; setStatus('');
+    try {
+      await processNotes(text);
+      $('notes').value = ''; state.tab = 'thanks'; state.filter = 'all'; render();
+      setStatus('Notes processed.'); toast('Notes processed');
+    } catch (err) {
+      setStatus(`Couldn’t process the notes: ${err.message}. Check that the backend is running, or switch to demo mode.`);
+    } finally { btn.disabled = false; btn.textContent = 'Process Notes'; }
+  });
+  document.addEventListener('click', async (e) => {
+    const t = e.target.closest('button'); if (!t) return;
+    const find = (id) => state.items.find(i => String(i.id) === String(id));
+    try {
+      if (t.dataset.tab) { state.tab = t.dataset.tab; render(); }
+      else if (t.dataset.filter) { state.filter = t.dataset.filter; renderFilters(); renderCards(); }
+      else if (t.dataset.copy) {
+        const it = find(t.dataset.copy);
+        try { await navigator.clipboard.writeText(it.thank_you_message); }
+        catch { const ta = document.createElement('textarea'); ta.value = it.thank_you_message; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
+        toast('Message copied');
+      }
+      else if (t.dataset.thank) { await markThanked(find(t.dataset.thank)); render(); toast('Marked as thanked'); }
+      else if (t.dataset.save) {
+        const it = find(t.dataset.save);
+        const input = document.querySelector(`input[data-val="${it.id}"]`);
+        const v = parseFloat(input.value);
+        if (isNaN(v) || v < 0) { toast('Enter a value of 0 or more'); input.focus(); return; }
+        await saveValue(it, v); renderLedger(); toast('Value saved');
+      }
+    } catch (err) { toast(`Something went wrong: ${err.message}`); }
+  });
+
+  function seed() {
+    state.items = mockApi.process("Rahman uncle - dinner set\nShilpi khala + family, envelope\nthe people from Chittagong - 2 sarees, didnt catch name\nbig box, no card???");
+    state.items[0].estimated_value = 5000; state.items[1].thanked = true; state.items[1].estimated_value = 10000;
+  }
+  seed(); render();
+})();
+</script>
+</body>
+</html>
